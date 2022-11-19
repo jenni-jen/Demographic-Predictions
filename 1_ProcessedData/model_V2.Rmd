@@ -1,0 +1,502 @@
+---
+title: "model_V2"
+output: html_document
+---
+
+# 1. Predict Gender
+
+```{r read data}
+setwd('D:\\NTU\\TalkingData\\1_ProcessedData')
+
+train = read.csv("train3.csv",stringsAsFactors = F, fileEncoding='utf-8')
+validation = read.csv("validation3.csv",stringsAsFactors = F, fileEncoding='utf-8')
+
+train$brand = as.factor(train$brand)
+validation$brand = as.factor(validation$brand)
+
+train$geoLabel = as.factor(train$geoLabel)
+validation$geoLabel = as.factor(validation$geoLabel)
+train[train$geoLabel==-1,"geoLabel"] = NA
+validation[validation$geoLabel==-1,"geoLabel"] = NA
+```
+
+```{r select gender}
+train_gender = train[,c(2,5:21)]
+valid_gender = validation[,c(2,5:21)]
+train_gender_noNA = train_gender[is.na(train_gender$geoLabel)==F, ]
+valid_gender_noNA = valid_gender[is.na(valid_gender$geoLabel)==F, ]
+train_gender_noGeo = train[,c(2,5:20)]
+valid_gender_noGeo = validation[,c(2,5:20)]
+```
+
+```{r boxplot events}
+library(ggplot2)
+myData = read.csv('final_data.csv')
+events = myData[,5:8]
+
+events_group = data.frame(event_type=rep('restDay',dim(events)[1]),
+                          event_count=events$restDay)
+for (i in 2:4){
+  eve = colnames(events)[i]
+  events_group = rbind(events_group,
+                       data.frame(event_type=rep(eve,dim(events)[1]),
+                                  event_count=events[,i]))
+}
+events_group = events_group[events_group$event_count>0 & 
+                              events_group$event_count<=100,]
+
+ggplot(data=events_group,aes(x=event_type,y=event_count)) +geom_boxplot()
+```
+
+```{r boxplot apps}
+apps = myData[,9:19]
+
+apps_group = data.frame(app_type=rep('education',dim(apps)[1]),
+                        app_count=apps$education)
+for (i in 2:11){
+  app = colnames(apps)[i]
+  apps_group = rbind(apps_group,
+                     data.frame(app_type=rep(app,dim(apps)[1]),
+                                app_count=apps[,i]))
+}
+apps_group = apps_group[apps_group$app_count>0 & apps_group$app_count<200,]
+
+ggplot(data=apps_group,aes(x=app_type,y=app_count)) +geom_boxplot()
+```
+
+
+
+## 1.1 Logistic regression
+
+```{r correlation}
+library(corrplot)
+allCorr = cor(train[5:19])
+corrplot.mixed(allCorr, lower.col='black', number.cex=0.5, tl.cex=0.8, tl.pos='lt')
+```
+
+```{r fit logit1 with Geo}
+logit_fit1 = glm(gender~., data=train_gender_noNA, family='binomial')
+summary(logit_fit1)
+```
+
+```{r pred logit1}
+get_accuracy_logi = function(fit, valid){
+  pred = predict(fit, valid)
+  pred_prop = 1/(1+exp(pred))
+  pred_result = 1-(pred_prop>0.7)
+  
+  accuracy = sum(pred_result == valid$gender)/dim(valid)[1]
+  return(accuracy)
+}
+
+get_accuracy_logi(logit_fit1, valid_gender_noNA)
+# accuracy = 0.665127
+```
+
+```{r fit logit2 noGeo}
+logit_fit2 = glm(gender~., data=train_gender_noGeo, family='binomial')
+summary(logit_fit2)
+```
+
+```{r pred logit2}
+get_accuracy_logi(logit_fit2, valid_gender_noGeo) # accuracy = 0.5847363
+```
+
+```{r logit result output}
+library(stargazer)
+stargazer(logit_fit1, title="Logistic Regression Results", align=F,type = "html",style = "qje", out="Logistic Results withGeo.html")
+```
+
+
+
+## 1.2 Random Forest
+
+```{r fit forest1 with Geo}
+library(randomForest)
+set.seed(123)
+
+my_forest1 = randomForest(as.factor(gender)~., data=train_gender_noNA,importance=T)
+
+importance(my_forest1,type=1)
+# MeanDecreaseAccuracy: 拿掉那个值之后预测准确性下降多少（也可能有负的）
+```
+
+```{r pred forest1}
+valid_dt=valid_gender_noNA[,2:18]
+
+p_forest1=predict(my_forest1,valid_dt, type='prob')[,1]
+p_forest1=1-(p_forest1>0.7)
+sum(p_forest1==valid_gender_noNA$gender)/dim(valid_gender_noNA)[1] 
+# accuracy = 0.6143187
+```
+
+```{r fit forest2 noGeo}
+set.seed(123)
+
+my_forest2 = randomForest(as.factor(gender)~., data=train_gender_noGeo,importance=T)
+
+importance(my_forest2,type=1)
+# MeanDecreaseAccuracy: 拿掉那个值之后预测准确性下降多少（也可能有负的）
+```
+
+```{r pred forest2}
+valid_dt_noGeo=valid_gender_noGeo[,2:17]
+
+p_forest2=predict(my_forest2,valid_dt_noGeo,type='prob')[,1]
+p_forest2=1-(p_forest2>0.7)
+sum(p_forest2==valid_gender_noGeo$gender)/dim(valid_gender_noGeo)[1] 
+# accuracy = 0.6071829
+```
+
+```{r forest loop with Geo}
+ntree_v=c(200,300,400,500)
+mtry_v=c(2,3,4,5)
+tree_accuracy=c()
+
+for(i in ntree_v){
+  for(j in mtry_v){
+    set.seed(123)
+    my_forest_loop = randomForest(as.factor(gender)~.,
+                                  data=train_gender_noNA,ntree=i,mtry=j,importance=T)
+    p_forest=predict(my_forest_loop,valid_dt,type='prob')[,1]
+    p_forest=1-(p_forest>0.7)
+    x=sum(p_forest==valid_gender_noNA$gender)/length(valid_gender_noNA$gender)
+    
+    tree_accuracy=c(tree_accuracy,x)
+  }
+}
+
+which.max(tree_accuracy) # 第13次accuracy最高，即ntree=500, mtry=2
+tree_accuracy[13] # accuracy = 0.7066975
+```
+
+```{r loop result with Geo}
+my_forest_best = randomForest(as.factor(gender)~.,
+                              data=train_gender_noNA,ntree=500,mtry=2,importance=T)
+importance(my_forest_best,type=1)
+```
+
+
+```{r forest loop noGeo}
+ntree_v=c(200,300,400,500)
+mtry_v=c(2,3,4,5)
+tree_accuracy_noGeo=c()
+
+for(i in ntree_v){
+  for(j in mtry_v){
+    set.seed(123)
+    my_forest_loop = randomForest(as.factor(gender)~.,
+                                  data=train_gender_noGeo,ntree=i,mtry=j,importance=T)
+    p_forest=predict(my_forest_loop,valid_dt_noGeo,type='prob')[,1]
+    p_forest=1-(p_forest>0.7)
+    x=sum(p_forest==valid_gender_noGeo$gender)/length(valid_gender_noGeo$gender)
+    
+    tree_accuracy_noGeo=c(tree_accuracy_noGeo,x)
+  }
+}
+
+which.max(tree_accuracy_noGeo) # 第13次accuracy最高，即ntree=500, mtry=2
+tree_accuracy_noGeo[13] # accuracy = 0.691358
+```
+
+
+## 1.3 XGBoost
+
+```{r xgboost with Geo}
+library(xgboost)
+
+set.seed(123)
+xg_gender_withGeo = xgboost(data = data.matrix(train_gender_noNA[,2:18]), 
+                            label = train_gender_noNA$gender, 
+                            max.depth = 3, eta = 0.35,  nrounds = 45, 
+                            objective = "binary:logistic")
+
+pred_xgb = 1-predict(xg_gender_withGeo, data.matrix(valid_gender_noNA[,2:18]))
+pred_xgb=1-(pred_xgb>0.7)
+sum(pred_xgb==valid_gender_noNA$gender)/length(valid_gender_noNA$gender) 
+# acurracy = 0.6096998
+```
+
+```{r xgboost noGeo}
+set.seed(123)
+xg_gender_noGeo = xgboost(data = data.matrix(train_gender_noGeo[,2:17]), 
+                          label = train_gender_noGeo$gender, 
+                          max.depth = 3, eta = 0.35,  nrounds = 45, 
+                          objective = "binary:logistic")
+
+pred_xgb = 1-predict(xg_gender_noGeo, data.matrix(valid_gender_noGeo[,2:17]))
+pred_xgb=1-(pred_xgb>0.7)
+sum(pred_xgb==valid_gender_noGeo$gender)/length(valid_gender_noGeo$gender) 
+# acurracy = 0.5836139
+```
+
+
+## 1.4 Ensemble
+
+```{r averaging}
+# all probs are the probs to be male (0)
+# logistic regression
+pred_logit = predict(logit_fit1, valid_gender_noNA)
+pred_logit = 1 / (1+exp(pred_logit))
+# random forest
+pred_rf = predict(my_forest_best, valid_dt, type='prob')[,1]
+# xgboost
+pred_xg = 1-predict(xg_gender_withGeo, data.matrix(valid_gender_noNA[,2:18]))
+
+ensem_aver = data.frame(pred_logit=pred_logit, pred_rf=pred_rf, pred_xg=pred_xg)
+ensem_aver$real = valid_gender_noNA$gender
+ensem_aver$pred_aver = (ensem_aver$pred_logit+ensem_aver$pred_rf+ensem_aver$pred_xg)/3
+ensem_aver$res_aver = 1-(ensem_aver$pred_aver>0.7)
+
+sum(ensem_aver$res_aver==ensem_aver$real)/dim(ensem_aver)[1]
+# accuracy = 0.6928406
+```
+
+```{r majority}
+ensem_aver$res_major = 1-
+  ((ensem_aver$pred_logit>0.7) + (ensem_aver$pred_rf>0.7) + (ensem_aver$pred_xg>0.7) >= 2)
+sum(ensem_aver$res_major==ensem_aver$real)/dim(ensem_aver)[1]
+# accuracy = 0.6766744
+```
+
+```{r weighted}
+ensem_aver$pred_wei = ensem_aver$pred_logit*0.35+
+  ensem_aver$pred_rf*0.4+ensem_aver$pred_xg*0.25
+ensem_aver$res_wei = 1-(ensem_aver$pred_wei>0.7)
+
+sum(ensem_aver$res_wei==ensem_aver$real)/dim(ensem_aver)[1]
+# accuracy = 0.6882217
+```
+
+```{r add results to ensem_aver}
+ensem_aver$res_logit = 1-(ensem_aver$pred_logit>0.7)
+ensem_aver$res_rf = 1-(ensem_aver$pred_rf>0.7)
+ensem_aver$res_xgb = 1-(ensem_aver$pred_xg>0.7)
+```
+
+
+## 1.5 ROC of all the models
+
+```{r roc res_aver}
+library(pROC)
+modelroc <- roc(ensem_aver$real,ensem_aver$res_aver)
+plot(modelroc, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+```{r roc res_major}
+modelroc_major <- roc(ensem_aver$real,ensem_aver$res_major)
+plot(modelroc_major, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+```{r roc res_wei}
+modelroc_wei <- roc(ensem_aver$real,ensem_aver$res_wei)
+plot(modelroc_wei, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+```{r roc logit}
+modelroc_logit <- roc(ensem_aver$real,1-(ensem_aver$pred_logit>0.7))
+plot(modelroc_logit, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+# prob=0.5, AUC=0.513; prob=0.6, AUC=0.560; prob=0.7, AUC=0.544
+```
+
+```{r roc rf}
+modelroc_rf <- roc(ensem_aver$real,1-(ensem_aver$pred_rf>0.7))
+plot(modelroc_rf, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+# prob=0.5, AUC=0.504; prob=0.6, AUC=0.506; prob=0.7, AUC=0.549
+```
+
+```{r roc xgb}
+modelroc_xgb <- roc(ensem_aver$real,1-(ensem_aver$pred_xg>0.7))
+plot(modelroc_xgb, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+# prob=0.5, AUC=0.518; prob=0.6, AUC=0.512; prob=0.7, AUC=0.507
+```
+
+
+
+# 2. Predict Age
+
+```{r split age by gender}
+train_noNA = train[! is.na(train$geoLabel),]
+train_M = train_noNA[train_noNA$gender==0,][,c(3,5:21)]
+train_F = train_noNA[train_noNA$gender==1,][,c(3,5:21)]
+valid_group = validation[! is.na(validation$geoLabel),][,3:21]
+```
+
+
+## 2.1 Monte Carlo Method to Get The Random Accuracy
+
+```{r Monte Carlo}
+trueGroup = valid_group$group
+trueGroup_prob = table(valid_group$group)/length(trueGroup)
+myAccuracy = c()
+
+set.seed(12345)
+for (i in 1:1000){
+  guessGroup = sample(0:3, length(trueGroup), replace=TRUE, prob=trueGroup_prob)
+  accu = sum(guessGroup==trueGroup)/length(trueGroup)
+  myAccuracy = append(myAccuracy, accu)
+}
+
+guessAccuracy = sum(myAccuracy) / 1000
+# guessAccuracy = 0.3106
+```
+
+
+## 2.2 Logistic Regression
+
+```{r fit logit by gender M}
+logit_M = glm(age~., data=train_M, family='binomial')
+summary(logit_M)
+```
+
+```{r fit logit by gender F}
+logit_F = glm(age~., data=train_F, family='binomial')
+summary(logit_F)
+```
+
+```{r pred logit by gender}
+valid_logit_M = valid_group[ensem_aver$res_logit==0,]
+valid_logit_F = valid_group[ensem_aver$res_logit==1,]
+
+# pred logit M
+pred = predict(logit_M, valid_logit_M)
+pred_prop = 1/(1+exp(pred))
+pred_res_logit_M = 1-(pred_prop>0.5)
+valid_logit_M$group_pred = rep(0, length(pred_res_logit_M))
+valid_logit_M$group_pred[pred_res_logit_M==1] = 1
+acc_logit_M = sum(valid_logit_M$group_pred==valid_logit_M$group)/dim(valid_logit_M)[1]
+# acc_logit_M = 0.4626866
+
+# pred logit F
+pred = predict(logit_F, valid_logit_F)
+pred_prop = 1/(1+exp(pred))
+pred_res_logit_F = 1-(pred_prop>0.5)
+valid_logit_F$group_pred = rep(2, length(pred_res_logit_F))
+valid_logit_F$group_pred[pred_res_logit_F==1] = 3
+acc_logit_F = sum(valid_logit_F$group_pred==valid_logit_F$group)/dim(valid_logit_F)[1]
+# acc_logit_F = 0.2142857
+
+accuracy = (sum(valid_logit_M$group_pred==valid_logit_M$group)+
+              sum(valid_logit_F$group_pred==valid_logit_F$group))/
+  (dim(valid_logit_M)[1]+dim(valid_logit_F)[1])
+# accuracy = 0.4064665
+```
+
+```{r one stage - multi logi}
+library(nnet)
+library(caret)
+
+# 多元分类模型构建
+mult.model<-multinom(as.factor(group)~.,data=train_noNA[,4:21])
+summary(mult.model)
+
+# 系数显著性检验
+z <- summary(mult.model)$coefficients/summary(mult.model)$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1))*2
+p
+
+# 测试集结果预测
+pre_logistic<-predict(mult.model,newdata = valid_group)
+
+# 预测正确百分比
+table(valid_group$group,pre_logistic)
+# 多分类混淆矩阵
+conMat4<-confusionMatrix(factor(pre_logistic),factor(valid_group$group))
+conMat4
+
+```
+
+
+## 2.3 Random Forest
+
+```{r fit RF by gender}
+set.seed(123)
+RF_M = randomForest(as.factor(age)~., data=train_M,importance=T)
+
+set.seed(123)
+RF_F = randomForest(as.factor(age)~., data=train_F,importance=T)
+```
+
+```{r pred RF by gender}
+valid_rf_M = valid_group[ensem_aver$res_rf==0,]
+valid_rf_F = valid_group[ensem_aver$res_rf==1,]
+
+# pred rf M
+pred = predict(RF_M, valid_rf_M, type='prob')[,1]
+pred_res_rf_M = 1-(pred>0.5)
+valid_rf_M$group_pred = rep(0, length(pred_res_rf_M))
+valid_rf_M$group_pred[pred_res_rf_M==1] = 1
+acc_rf_M = sum(valid_rf_M$group_pred==valid_rf_M$group)/dim(valid_rf_M)[1]
+# acc_rf_M = 0.4621849
+
+# pred rf F
+pred = predict(RF_F, valid_rf_F, type='prob')[,1]
+pred_res_rf_F = 1-(pred>0.5)
+valid_rf_F$group_pred = rep(2, length(pred_res_rf_F))
+valid_rf_F$group_pred[pred_res_rf_F==1] = 3
+acc_rf_F = sum(valid_rf_F$group_pred==valid_rf_F$group)/dim(valid_rf_F)[1]
+# acc_rf_F = 0.1842105
+
+accuracy = (sum(valid_rf_M$group_pred==valid_rf_M$group)+
+              sum(valid_rf_F$group_pred==valid_rf_F$group))/
+  (dim(valid_rf_M)[1]+dim(valid_rf_F)[1])
+# accuracy = 0.4133949
+```
+
+
+## 2.4 XGBoost
+
+```{r fit XGB by gender}
+set.seed(123)
+xgb_M = xgboost(data = data.matrix(train_M[,2:18]), 
+                label = train_M$age, 
+                max.depth = 3, eta = 0.35,  nrounds = 45, 
+                objective = "binary:logistic")
+
+set.seed(123)
+xgb_F = xgboost(data = data.matrix(train_F[,2:18]), 
+                label = train_F$age, 
+                max.depth = 3, eta = 0.35,  nrounds = 45, 
+                objective = "binary:logistic")
+```
+
+```{r pred XGB by gender}
+valid_xgb_M = valid_group[ensem_aver$res_xgb==0,]
+valid_xgb_F = valid_group[ensem_aver$res_xgb==1,]
+
+# pred xgb M
+pred = 1-predict(xgb_M, data.matrix(valid_xgb_M[,3:19]))
+pred_res_xgb_M = 1-(pred>0.5)
+valid_xgb_M$group_pred = rep(0, length(pred_res_xgb_M))
+valid_xgb_M$group_pred[pred_res_xgb_M==1] = 1
+acc_xgb_M = sum(valid_xgb_M$group_pred==valid_xgb_M$group)/dim(valid_xgb_M)[1]
+# acc_xgb_M = 0.4501608
+
+# pred xgb F
+pred = 1-predict(xgb_F, data.matrix(valid_xgb_F[,3:19]))
+pred_res_xgb_F = 1-(pred>0.5)
+valid_xgb_F$group_pred = rep(2, length(pred_res_xgb_F))
+valid_xgb_F$group_pred[pred_res_xgb_F==1] = 3
+acc_xgb_F = sum(valid_xgb_F$group_pred==valid_xgb_F$group)/dim(valid_xgb_F)[1]
+# acc_xgb_F = 0.1721311
+
+accuracy = (sum(valid_xgb_M$group_pred==valid_xgb_M$group)+
+              sum(valid_xgb_F$group_pred==valid_xgb_F$group))/
+  (dim(valid_xgb_M)[1]+dim(valid_xgb_F)[1])
+# accuracy = 0.3718245
+```
+
+
+
