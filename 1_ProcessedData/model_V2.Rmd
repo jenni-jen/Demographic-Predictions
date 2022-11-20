@@ -6,7 +6,7 @@ output: html_document
 # 1. Predict Gender
 
 ```{r read data}
-setwd('D:\\NTU\\TalkingData\\1_ProcessedData')
+setwd('')
 
 train = read.csv("train3.csv",stringsAsFactors = F, fileEncoding='utf-8')
 validation = read.csv("validation3.csv",stringsAsFactors = F, fileEncoding='utf-8')
