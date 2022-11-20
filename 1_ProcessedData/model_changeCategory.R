@@ -1,4 +1,4 @@
-setwd('D:\\NTU\\TalkingData\\1_ProcessedData')
+setwd('')
 
 train = read.csv("train2.csv",stringsAsFactors = F, fileEncoding='utf-8')
 validation = read.csv("validation2.csv",stringsAsFactors = F, fileEncoding='utf-8')
